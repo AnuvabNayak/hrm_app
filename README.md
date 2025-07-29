@@ -16,7 +16,6 @@ A robust, modular backend for managing users, employees, attendance, and leave i
 - [Development \& Testing](#development--testing)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
-- [License](#license)
 
 
 ## Features
