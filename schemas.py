@@ -46,7 +46,7 @@ class AttendanceUpdate(BaseModel):
     login_time: datetime = None
     logout_time: datetime = None
     on_leave: bool = None
-    work_hours: int = None
+    work_hours: float = None
 
 class AttendanceOut(BaseModel):
     id: int
@@ -111,6 +111,42 @@ class LeaveRequestOut(BaseModel):
     @field_serializer("end_date")
     def serialize_end_date(self, value):
         return to_ist(value)
+
+    class Config:
+        from_attributes = True
+
+# Leave Balance (additions)
+
+class LeaveBalanceOut(BaseModel):
+    available_coins: int          # min(rolling_available, 10)
+    raw_available: int            # uncapped in rolling window
+    expiring_soon: list[dict]     # [{ "expiry_date": datetime, "amount": int }]
+    recent_txns: list[dict]       # last 10 txns: [{ "type": str, "amount": int, "occurred_at": datetime, "comment": Optional[str] }]
+
+    @field_serializer("expiring_soon")
+    def serialize_expiry(self, v):
+        # convert datetimes to IST similar to others if desired
+        from utils import to_ist
+        out = []
+        for item in v:
+            out.append({
+                "expiry_date": to_ist(item["expiry_date"]),
+                "amount": item["amount"],
+            })
+        return out
+
+    @field_serializer("recent_txns")
+    def serialize_txns(self, v):
+        from utils import to_ist
+        out = []
+        for t in v:
+            out.append({
+                "type": t["type"],
+                "amount": t["amount"],
+                "occurred_at": to_ist(t["occurred_at"]),
+                "comment": t.get("comment"),
+            })
+        return out
 
     class Config:
         from_attributes = True

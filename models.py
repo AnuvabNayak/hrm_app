@@ -1,6 +1,7 @@
-from sqlalchemy import Float, Column, Integer, String, DateTime, Boolean, ForeignKey, UniqueConstraint
+from sqlalchemy import Float, Column, Integer, String, DateTime, Boolean, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
+from datetime import datetime, timezone
 
 Base = declarative_base()
 
@@ -39,3 +40,45 @@ class LeaveRequest(Base):
     reason = Column(String, nullable=True)
 
     employee = relationship("Employee")
+    
+class EmployeeCoin(Base):
+    __tablename__ = "employee_coins"
+
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False)
+    accrual_date = Column(DateTime, nullable=False)
+    expiry_date = Column(DateTime, nullable=False)
+    status = Column(String, default="active")  # "active", "spent", "expired"
+    spent_on = Column(DateTime, nullable=True)
+    leave_request_id = Column(Integer, ForeignKey("leave_requests.id"), nullable=True)
+
+# Leave Balance (additions)
+
+class LeaveCoin(Base):
+    __tablename__ = "leave_coins"
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), index=True, nullable=False)
+    grant_date = Column(DateTime, nullable=False)    # UTC
+    expiry_date = Column(DateTime, nullable=False)   # UTC = grant_date + 12 months
+    quantity = Column(Integer, nullable=False, default=1)
+    remaining = Column(Integer, nullable=False, default=1)
+    source = Column(String, nullable=False, default="monthly_grant")  # or "manual_adjustment"
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    employee = relationship("Employee")
+
+Index("ix_leave_coins_employee_expiry", LeaveCoin.employee_id, LeaveCoin.expiry_date)
+
+class LeaveCoinTxn(Base):
+    __tablename__ = "leave_coin_txn"
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), index=True, nullable=False)
+    coin_id = Column(Integer, ForeignKey("leave_coins.id"), nullable=True)
+    type = Column(String, nullable=False)  # "grant" | "consume" | "expire" | "adjust" | "restore"
+    amount = Column(Integer, nullable=False)  # positive
+    ref_leave_request_id = Column(Integer, ForeignKey("leave_requests.id"), nullable=True)
+    occurred_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    comment = Column(String, nullable=True)
+
+    employee = relationship("Employee")
+    coin = relationship("LeaveCoin")

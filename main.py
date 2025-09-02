@@ -1,15 +1,84 @@
-from fastapi import APIRouter, FastAPI, Depends, HTTPException
+from fastapi import APIRouter, FastAPI, Depends, HTTPException, Query
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+import logging
+
 from db import get_db, engine, SessionLocal
 from models import User, Employee, Base, Attendance
 from schemas import UserCreate, UserOut, Token
 from auth import hash_password, verify_password, create_access_token
 from dependencies import get_current_user
 from router import employees, attendance, leave
-from datetime import datetime, timedelta, timezone
-from apscheduler.schedulers.background import BackgroundScheduler
+from router import leave_coin as leave_coins_router
+from services.leave_coins import grant_coins, expire_coins
+from dependencies import router as dependencies_router
 
+scheduler = BackgroundScheduler()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("scheduler")
+
+def remove_old_attendance():
+    db = SessionLocal()
+    try:
+        threshold = datetime.now(timezone.utc) - timedelta(days=30)
+        db.query(Attendance).filter(Attendance.login_time < threshold).delete()
+        db.commit()
+    finally:
+        db.close()
+
+def grant_monthly_coins():
+    db = SessionLocal()
+    try:
+        employees = db.query(Employee).all()
+        total_granted = 0
+        for e in employees:
+            total_granted += grant_coins(db, e.id, amount=1, source="monthly_grant")
+        db.commit()
+        logging.getLogger("scheduler").info(f"Monthly grant done. total_granted={total_granted}")
+    except Exception as ex:
+        db.rollback()
+        logging.getLogger("scheduler").exception("Monthly grant failed: %s", ex)
+    finally:
+        db.close()
+
+def expire_old_coins():
+    db = SessionLocal()
+    try:
+        total = expire_coins(db)
+        db.commit()
+        logging.getLogger("scheduler").info(f"Expired coins run done. total_expired={total}")
+    except Exception as ex:
+        db.rollback()
+        logging.getLogger("scheduler").exception("Expire coins failed: %s", ex)
+    finally:
+        db.close()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # startup
+    scheduler.add_job(remove_old_attendance, "interval", days=1)
+    scheduler.add_job(grant_monthly_coins, CronTrigger(day="1", hour=0, minute=0))
+    scheduler.add_job(expire_old_coins, "interval", days=1)
+    scheduler.start()
+    try:
+        yield
+    finally:
+        # shutdown
+        scheduler.shutdown()
+
+app = FastAPI(lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,# Set to False unless you need credentialed cross-origin requests (cookies, HTTP auth)
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 router = APIRouter()
 
 @router.post("/token", response_model=Token)
@@ -26,51 +95,61 @@ def login_for_access_token(
     access_token = create_access_token(data={"sub": user.username, "role": user.role})
     return {"access_token": access_token, "token_type": "bearer"}
 
-# Protect Endpoints with Role Checks
-
-app = FastAPI()
-
+# Routers
 app.include_router(router)
 app.include_router(employees.router)
 app.include_router(attendance.router)
 app.include_router(leave.router)
+app.include_router(leave_coins_router.router)
+app.include_router(dependencies_router)
 
 @app.post("/register", response_model=UserOut)
 def register(user: UserCreate, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.username == user.username).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Username already registered")
+    
+    role = "employee"
     hashed_pw = hash_password(user.password)
-    new_user = User(username=user.username, hashed_password=hashed_pw, role=user.role)
+    new_user = User(username=user.username, hashed_password=hashed_pw, role=role)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-
+    
     # If regular employee, create associated Employee record!
-    if new_user.role == "employee":
+    if role == "employee":
         if not db.query(Employee).filter(Employee.user_id == new_user.id).first():
             employee = Employee(name=new_user.username, user_id=new_user.id)
             db.add(employee)
             db.commit()
+            db.refresh(employee)
     return new_user
 
-@app.get("/users/me", response_model=UserOut)
-def read_users_me(current_user: User = Depends(get_current_user)):
-    # Get the current authenticated user.
-    return current_user
 
-Base.metadata.create_all(bind=engine)
-
-def remove_old_attendance():
-    db = SessionLocal()
-    threshold = datetime.now(timezone.utc) - timedelta(days=30)
-    db.query(Attendance).filter(Attendance.login_time < threshold).delete()
+@app.post("/__dev__/grant-now")
+def dev_grant_now(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if current_user.role not in ["super_admin"]:
+        raise HTTPException(status_code=403, detail="Not permitted")
+    from models import Employee
+    from services.leave_coins import grant_coins
+    total = 0
+    for e in db.query(Employee).all():
+        total += grant_coins(db, e.id, 1, "manual_dev_grant")
     db.commit()
-    db.close()
+    return {"granted": total}
 
-scheduler = BackgroundScheduler()
-scheduler.add_job(remove_old_attendance, "interval", days=1)
-scheduler.start()
+@app.post("/__dev__/expire-now")
+def dev_expire_now(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if current_user.role not in ["super_admin"]:
+        raise HTTPException(status_code=403, detail="Not permitted")
+    from services.leave_coins import expire_coins
+    total = expire_coins(db)
+    db.commit()
+    return {"expired": total}
+
+
+Base.metadata.create_all(bind=engine) # TODO
+        
 
 
 # uvicorn main:app --reload
@@ -105,3 +184,10 @@ scheduler.start()
 #         return {"status": "success", "message": "Database connection successful"}
 #     except SQLAlchemyError as e:
 #         return {"status": "error", "message": f"Database connection failed: {str(e)}"}
+
+    # if new_user.role == "employee":
+    #     if not db.query(Employee).filter(Employee.user_id == new_user.id).first():
+    #         employee = Employee(name=new_user.username, user_id=new_user.id)
+    #         db.add(employee)
+    #         db.commit()
+    # return new_user
