@@ -6,6 +6,7 @@ from db import get_db
 from dependencies import get_current_user, allow_employee, allow_admin
 from typing import List
 from zoneinfo import ZoneInfo
+from utils import ensure_utc_naive
 
 # from datetime import timezone
 # import pytz
@@ -18,7 +19,18 @@ router = APIRouter(prefix="/attendance", tags=["Attendance"])
 @router.post("/log", dependencies=[Depends(allow_employee)])
 def log_attendance(attendance: AttendanceCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     # Only employees can log their own attendance
+    if current_user.role not in ["admin", "super_admin"]:
+        emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+        if not emp:
+            raise HTTPException(status_code=404, detail="Employee profile not found")
+        attendance.employee_id = emp.id
     employee = db.query(Employee).filter(Employee.id == attendance.employee_id).first()
+    login_time_utc = ensure_utc_naive(attendance.login_time)
+    logout_time_utc = ensure_utc_naive(attendance.logout_time) if attendance.logout_time else None
+    
+    if logout_time_utc and logout_time_utc < login_time_utc:
+        raise HTTPException(status_code=400, detail="logout_time cannot be before login_time")
+
     if not employee or employee.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Operation not permitted")
 
@@ -27,18 +39,21 @@ def log_attendance(attendance: AttendanceCreate, db: Session = Depends(get_db), 
         raise HTTPException(status_code=400, detail="logout_time cannot be before login_time")
 
     work_hours = None
-
-    if attendance.login_time and attendance.logout_time:
-        delta = attendance.logout_time - attendance.login_time
+    if login_time_utc and logout_time_utc:
+        delta = logout_time_utc - login_time_utc
         work_hours = round(delta.total_seconds() / 3600, 2)
+    # if attendance.login_time and attendance.logout_time:
+    #     delta = attendance.logout_time - attendance.login_time
+    #     work_hours = round(delta.total_seconds() / 3600, 2)
 
     db_attendance = Attendance(
         employee_id=attendance.employee_id,
-        login_time=attendance.login_time,
-        logout_time=attendance.logout_time,
+        login_time=login_time_utc,
+        logout_time=logout_time_utc,
         on_leave=attendance.on_leave,
         work_hours=work_hours,
     )
+
 
     db.add(db_attendance)
     db.commit()
@@ -52,7 +67,12 @@ def read_attendance(skip: int = 0, limit: int = 10, db: Session = Depends(get_db
     query = db.query(Attendance)
     if current_user.role not in ["admin", "super_admin"]:
         query = query.join(Employee).filter(Employee.user_id == current_user.id)
-    return query.offset(skip).limit(limit).all()
+    # SQL Server requires ORDER BY when using OFFSET/FETCH
+    query = query.order_by(Attendance.id.desc())
+    rows = query.offset(skip).limit(limit).all()
+    # Force Pydantic serialization so computed_field appears
+    return [AttendanceOut.model_validate(r, from_attributes=True) for r in rows]
+    
 
 @router.get("/{attendance_id}", response_model=AttendanceOut)
 def read_attendance_record(attendance_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
@@ -66,13 +86,22 @@ def read_attendance_record(attendance_id: int, db: Session = Depends(get_db), cu
     return attendance
 
 # Admin-only edit/delete of attendance (employees cannot change past attendance)
-@router.put("/{attendance_id}", response_model=AttendanceOut, dependencies=[Depends(allow_admin)])
-def update_attendance(attendance_id: int, update: AttendanceUpdate, db: Session = Depends(get_db)):
+@router.put("/{attendance_id}", response_model=AttendanceOut)
+def update_attendance(attendance_id: int, update: AttendanceUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     attendance = db.query(Attendance).filter(Attendance.id == attendance_id).first()
     if not attendance:
         raise HTTPException(status_code=404, detail="Attendance record not found")
 
-    for field, value in update.model_dump(exclude_unset=True).items():
+    emp = db.query(Employee).filter(Employee.id == attendance.employee_id).first()
+    is_admin = current_user.role in ["admin", "super_admin"]
+    is_owner = emp and emp.user_id == current_user.id
+    if not (is_admin or is_owner):
+        raise HTTPException(status_code=403, detail="Operation not permitted")
+
+    # If employee, only allow setting logout_time; do not allow edits to past sessions
+    payload = update if is_admin else AttendanceUpdate(logout_time=update.logout_time)
+
+    for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(attendance, field, value)
 
     if attendance.login_time and attendance.logout_time:
@@ -82,6 +111,23 @@ def update_attendance(attendance_id: int, update: AttendanceUpdate, db: Session 
     db.commit()
     db.refresh(attendance)
     return attendance
+
+# @router.put("/{attendance_id}", response_model=AttendanceOut, dependencies=[Depends(allow_admin)])
+# def update_attendance(attendance_id: int, update: AttendanceUpdate, db: Session = Depends(get_db)):
+#     attendance = db.query(Attendance).filter(Attendance.id == attendance_id).first()
+#     if not attendance:
+#         raise HTTPException(status_code=404, detail="Attendance record not found")
+
+#     for field, value in update.model_dump(exclude_unset=True).items():
+#         setattr(attendance, field, value)
+
+#     if attendance.login_time and attendance.logout_time:
+#         delta = attendance.logout_time - attendance.login_time
+#         attendance.work_hours = round(delta.total_seconds() / 3600, 2)
+
+#     db.commit()
+#     db.refresh(attendance)
+#     return attendance
 
 @router.delete("/{attendance_id}", dependencies=[Depends(allow_admin)])
 def delete_attendance(attendance_id: int, db: Session = Depends(get_db)):

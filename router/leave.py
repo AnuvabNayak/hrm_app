@@ -5,15 +5,32 @@ from schemas import LeaveRequestCreate, LeaveRequestUpdate, LeaveRequestOut
 from db import get_db
 from dependencies import get_current_user, allow_admin
 from typing import List
+from utils import ensure_utc_naive
 
 router = APIRouter(prefix="/leaves", tags=["Leaves"])
 
 @router.post("/", response_model=LeaveRequestOut, status_code=status.HTTP_201_CREATED)
 def create_leave(leave: LeaveRequestCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    if current_user.role not in ["admin", "super_admin"]:
+        emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee profile not found")
+    leave.employee_id = emp.id
     employee = db.query(Employee).filter(Employee.id == leave.employee_id).first()
+    start_utc = ensure_utc_naive(leave.start_date)
+    end_utc = ensure_utc_naive(leave.end_date)
+    if end_utc < start_utc:
+        raise HTTPException(status_code=400, detail="end_date cannot be before start_date")
+
     if not employee or (current_user.role not in ["admin", "super_admin"] and employee.user_id != current_user.id):
         raise HTTPException(status_code=403, detail="Operation not permitted")
-    db_leave = LeaveRequest(**leave.model_dump())
+    db_leave = LeaveRequest(
+        employee_id=leave.employee_id,
+        start_date=start_utc,
+        end_date=end_utc,
+        leave_type=leave.leave_type,
+        reason=leave.reason,
+        )
     db.add(db_leave)
     db.commit()
     db.refresh(db_leave)

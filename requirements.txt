@@ -1,8 +1,11 @@
 fastapi
 uvicorn[standard]
-psycopg2-binary
-python-dotenv
-python-jose
-bcrypt
 sqlalchemy
+python-multipart
+python-jose[cryptography]
+passlib[bcrypt]
+python-decouple
+apscheduler
+requests
 pydantic
+EOF
