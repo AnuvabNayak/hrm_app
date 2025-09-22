@@ -164,25 +164,11 @@ Add header:
 Authorization: Bearer <access_token>
 ```
 
-
 ## Development
 
 ```bash
 pytest
 ```
-
-- **Code Quality**:
-Follow PEP8 style guidelines and use docstrings for all modules, classes, and functions.
-- **Async Support**:
-Endpoints can be refactored to use `async def` for improved scalability.
-
-## Contributing
-
-1. Fork the repository.
-2. Create a new branch (`git checkout -b feature/your-feature`).
-3. Commit your changes (`git commit -am 'Add new feature'`).
-4. Push to the branch (`git push origin feature/your-feature`).
-5. Open a Pull Request.
 
 
 <div style="text-align: center">⁂</div>
