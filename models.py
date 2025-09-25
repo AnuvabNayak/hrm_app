@@ -2,6 +2,13 @@ from sqlalchemy import func, Float, Column, Integer, String, DateTime, Boolean, 
 from sqlalchemy.orm import relationship, DeclarativeBase
 from datetime import datetime, timezone
 
+# TIMEZONE ARCHITECTURE NOTES:
+# =================================
+# - ALL DateTime fields in database store UTC time as naive datetime
+# - Use services.timezone_utils for IST conversion in API responses
+# - Database storage remains UTC for consistency, performance, and global compatibility
+
+
 class Base(DeclarativeBase):
     pass
 

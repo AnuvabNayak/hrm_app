@@ -1,12 +1,38 @@
 # services/attendance_rt.py
-
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from models import WorkSession, BreakInterval, Employee
+from .timezone_utils import (
+    utc_now, format_ist_datetime, format_ist_time_12h, 
+    format_ist_date, debug_timezone_info
+)
+
+# IST Timezone Utilities
+def _ist_timezone():
+    """Return IST timezone object (UTC+5:30)"""
+    return timezone(timedelta(hours=5, minutes=30))
+
+def _utc_to_ist(utc_dt):
+    """Convert UTC datetime to IST"""
+    if utc_dt is None:
+        return None
+    if utc_dt.tzinfo is None:
+        utc_dt = utc_dt.replace(tzinfo=timezone.utc)
+    return utc_dt.astimezone(_ist_timezone())
+
+def _ist_format(utc_dt):
+    """Format UTC datetime as IST string for API responses"""
+    if utc_dt is None:
+        return None
+    ist_dt = _utc_to_ist(utc_dt)
+    return ist_dt.strftime("%Y-%m-%d %H:%M:%S")
 
 def _utc_now():
-    return datetime.now(timezone.utc).replace(tzinfo=None)  # store naive UTC
+    return utc_now()  # Use universal utility
+
+# def _utc_now():
+#     return datetime.now(timezone.utc).replace(tzinfo=None)  # store naive UTC
 
 def _sum_breaks(db: Session, session_id: int, as_of: datetime | None = None) -> int:
     as_of = as_of or _utc_now()
@@ -42,11 +68,14 @@ def clock_in(db: Session, employee_id: int) -> WorkSession:
     existing = get_active_session(db, employee_id)
     if existing:
         return existing
+    
     now = _utc_now()
     ws = WorkSession(employee_id=employee_id, clock_in_time=now, status="active", total_work_seconds=0)
     db.add(ws)
-    db.flush()
+    db.commit()  # COMMIT instead of flush
+    db.refresh(ws)  # Refresh to get the ID
     return ws
+
 
 def start_break(db: Session, employee_id: int) -> WorkSession:
     ws = get_active_session(db, employee_id)
@@ -84,8 +113,10 @@ def clock_out(db: Session, employee_id: int) -> WorkSession:
     ws = get_active_session(db, employee_id)
     if not ws or ws.status == "ended":
         raise RuntimeError("No active session to clock out")
+
     now = _utc_now()
     if ws.status == "break":
+        # Handle open break
         open_break = (
             db.query(BreakInterval)
             .filter(BreakInterval.session_id == ws.id, BreakInterval.end_time.is_(None))
@@ -95,11 +126,14 @@ def clock_out(db: Session, employee_id: int) -> WorkSession:
         if open_break:
             open_break.end_time = now
             db.add(open_break)
+
     breaks_sec = _sum_breaks(db, ws.id, as_of=now)
     ws.clock_out_time = now
     ws.total_work_seconds = _elapsed_work_seconds(ws.clock_in_time, breaks_sec, clock_out=now)
     ws.status = "ended"
     db.add(ws)
+    db.commit()
+    db.refresh(ws)
     return ws
 
 def session_state(db: Session, employee_id: int) -> dict:
@@ -107,14 +141,17 @@ def session_state(db: Session, employee_id: int) -> dict:
     if not ws:
         return {
             "session_id": None,
-            "status": None,
+            "status": "ended",
             "clock_in_time": None,
             "clock_out_time": None,
             "elapsed_work_seconds": 0,
             "elapsed_break_seconds": 0,
         }
+
     now = _utc_now()
     breaks_sec = _sum_breaks(db, ws.id, as_of=now)
+    
+    # Initialize ongoing_break_sec BEFORE the if statement
     ongoing_break_sec = 0
     if ws.status == "break":
         last_open = (
@@ -125,14 +162,16 @@ def session_state(db: Session, employee_id: int) -> dict:
         )
         if last_open:
             ongoing_break_sec = int((now - last_open.start_time).total_seconds())
+
     return {
         "session_id": ws.id,
         "status": ws.status,
-        "clock_in_time": ws.clock_in_time,
-        "clock_out_time": ws.clock_out_time,
+        "clock_in_time": format_ist_datetime(ws.clock_in_time),
+        "clock_out_time": format_ist_datetime(ws.clock_out_time),
         "elapsed_work_seconds": _elapsed_work_seconds(ws.clock_in_time, breaks_sec, ws.clock_out_time, now),
         "elapsed_break_seconds": ongoing_break_sec,
     }
+
 
 def sessions_last_days(db: Session, employee_id: int, days: int) -> list[dict]:
     cutoff = _utc_now() - timedelta(days=days)
@@ -151,13 +190,14 @@ def sessions_last_days(db: Session, employee_id: int, days: int) -> list[dict]:
         )
         ot_sec = 0
         out.append({
-            "date": s.clock_in_time,
-            "first_clock_in": s.clock_in_time,
-            "last_clock_out": s.clock_out_time if s.clock_out_time else None,
+            "date": format_ist_date(s.clock_in_time),
+            "first_clock_in": format_ist_datetime(s.clock_in_time),
+            "last_clock_out": format_ist_datetime(s.clock_out_time),
             "total_work_seconds": total_work if total_work is not None else 0,
             "total_break_seconds": breaks_sec if breaks_sec is not None else 0,
             "ot_sec": ot_sec,
-            })
+        })
+
     return out
 
 def get_today_completed_work(db: Session, employee_id: int) -> dict:

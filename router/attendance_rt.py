@@ -6,10 +6,12 @@ from db import get_db
 from dependencies import get_current_user
 from models import Employee, User, WorkSession  # Add WorkSession to imports
 from services.attendance_rt import *
+from services.timezone_utils import format_ist_time_12h
 # from services.attendance_rt import (
 #     require_employee_for_user, clock_in, start_break, stop_break, clock_out,
 #     session_state, sessions_last_days, get_today_completed_work, _sum_breaks, _utc_now # Add this
 # )
+from zoneinfo import ZoneInfo
 from schemas import WorkSessionStateOut, WorkSessionDayRow, ClockActionResponse
 router = APIRouter(prefix="/attendance-rt", tags=["Attendance RT"])
 
@@ -23,8 +25,11 @@ def get_active(db: Session = Depends(get_db), current_user: User = Depends(get_c
 def post_clock_in(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     emp = require_employee_for_user(db, current_user.id)
     ws = clock_in(db, emp.id)
-    db.commit()
-    return ClockActionResponse(session_id=ws.id, status=ws.status, message="Clocked in")
+    return ClockActionResponse(
+        session_id=ws.id, 
+        status=ws.status, 
+        message=f"Clocked in at {format_ist_time_12h(ws.clock_in_time)} IST"
+    )
 
 @router.post("/start-break", response_model=ClockActionResponse)
 def post_start_break(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -47,14 +52,22 @@ def post_stop_break(db: Session = Depends(get_db), current_user: User = Depends(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 @router.post("/clock-out", response_model=ClockActionResponse)
-def post_clock_out(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    emp = require_employee_for_user(db, current_user.id)
+def post_clock_out(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     try:
+        emp = require_employee_for_user(db, current_user.id)
         ws = clock_out(db, emp.id)
-        db.commit()
-        return ClockActionResponse(session_id=ws.id, status=ws.status, message="Clocked out")
+        # db.commit()  # Backup commit (if service doesn't commit)
+        return ClockActionResponse(
+            session_id=ws.id,
+            status=ws.status,
+            message=f"Clocked out at {format_ist_time_12h(ws.clock_out_time)} IST"
+        )
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
 
 @router.get("/recent", response_model=list[WorkSessionDayRow])
 def get_recent(days: int = 14, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
