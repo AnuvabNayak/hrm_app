@@ -179,3 +179,18 @@ def consume_coins(db: Session, employee_id: int, amount: int, ref_leave_request_
         # Caller must rollback to cancel partial deductions.
         return 0
     return consumed_total
+
+def _duration_days(start_date: datetime, end_date: datetime) -> int:
+    """
+    Calculate the number of days between start and end dates (inclusive).
+    Both dates should be UTC naive datetimes.
+    """
+    if not start_date or not end_date:
+        return 0
+    
+    # Convert to dates to avoid time component issues
+    start = start_date.date() if hasattr(start_date, 'date') else start_date
+    end = end_date.date() if hasattr(end_date, 'date') else end_date
+    
+    # Calculate inclusive days (end - start + 1)
+    return (end - start).days + 1

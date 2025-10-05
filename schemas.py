@@ -1,8 +1,8 @@
-from pydantic import BaseModel, field_serializer, computed_field
-from typing import Optional, Literal
+from pydantic import BaseModel, field_serializer, computed_field, Field, validator
+from typing import Optional, Literal, List
 from datetime import datetime
 from utils import to_ist
-
+import re
 # User schemas
 class UserCreate(BaseModel):
     username: str
@@ -105,7 +105,7 @@ class AttendanceOut(BaseModel):
 
 # Leave request
 class LeaveRequestCreate(BaseModel):
-    employee_id: int
+    employee_id: Optional[int] = None
     start_date: datetime
     end_date: datetime
     leave_type: str
@@ -158,16 +158,15 @@ class LeaveBalanceOut(BaseModel):
 
     @field_serializer("recent_txns")
     def serialize_txns(self, v):
-        from utils import to_ist
         out = []
         for t in v:
             out.append({
                 "type": t["type"],
-                "amount": t["amount"],
-                "occurred_at": to_ist(t["occurred_at"]),
+                "amount": t["amount"], 
+                "occurred_at": t["occurred_at"],  # ✅ FIXED: Use string directly
                 "comment": t.get("comment"),
-            })
-        return out
+                })
+            return out
 
     class Config:
         from_attributes = True
@@ -198,201 +197,69 @@ class ClockActionResponse(BaseModel):
     message: str
 
 
-# from pydantic import BaseModel, field_serializer, computed_field
-# from typing import Optional, Literal
-# from datetime import datetime
-# from utils import to_ist
+# Post schemas
+class PostCreate(BaseModel):
+    title: str
+    content: str
+    is_pinned: Optional[bool] = False
 
-# # User schemas
-# class UserCreate(BaseModel):
-#     username: str
-#     password: str
-#     role: str
-#     email: str | None = None
-#     phone: str | None = None
-#     avatar_url: str | None = None
-#     emp_code: str | None = None
+class PostUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    is_pinned: Optional[bool] = None
+    status: Optional[str] = None
 
-
-# class UserOut(BaseModel):
-#     id: int
-#     username: str
-#     role: str
-#     class Config:
-#         from_attributes = True
-
-# class Token(BaseModel):
-#     access_token: str
-#     token_type: str
-
-# # Employee schemas
-# class EmployeeCreate(BaseModel):
-#     name: str
-#     user_id: int
-#     email: str | None = None
-#     phone: str | None = None
-#     avatar_url: str | None = None
-#     emp_code: str | None = None
-
-# class EmployeeUpdate(BaseModel):
-#     name: str | None = None
-#     email: str | None = None
-#     phone: str | None = None
-#     avatar_url: str | None = None
-#     emp_code: str | None = None
-
-
-# class EmployeeOut(BaseModel):
-#     id: int
-#     name: str
-#     user_id: int
-#     email: str | None = None
-#     phone: str | None = None
-#     avatar_url: str | None = None
-#     emp_code: str | None = None
-
-#     class Config:
-#         from_attributes = True
-
-# # Attendance schemas
-# class AttendanceCreate(BaseModel):
-#     employee_id: int
-#     login_time: datetime
-#     logout_time: datetime | None = None
-#     on_leave: bool = False
-#     work_hours: Optional[float] = None  # allow null or omission
-
-# class AttendanceUpdate(BaseModel):
-#     login_time: datetime | None = None
-#     logout_time: datetime | None = None
-#     on_leave: bool | None = None
-#     work_hours: Optional[float] = None
+class PostOut(BaseModel):
+    id: int
+    title: str
+    content: str
+    author_id: int
+    author_name: Optional[str] = None
+    created_at: str
+    updated_at: str
+    is_pinned: bool
+    status: str
+    reaction_counts: Optional[dict] = {}
+    user_reactions: Optional[List[str]] = []
+    is_viewed: Optional[bool] = False
     
-# class AttendanceOut(BaseModel):
-#     id: int
-#     employee_id: int
-#     login_time: datetime
-#     logout_time: datetime | None = None
-#     on_leave: bool
-#     work_hours: float | None = None
+    class Config:
+        from_attributes = True
 
-#     @field_serializer("login_time")
-#     def serialize_login_time(self, value):
-#         return to_ist(value)
+# Reaction schemas
+class ReactionCreate(BaseModel):
+    emoji: str
 
-#     @field_serializer("logout_time")
-#     def serialize_logout_time(self, value):
-#         return to_ist(value)
+class ReactionOut(BaseModel):
+    id: int
+    post_id: int
+    user_id: int
+    emoji: str
+    created_at: str
     
-#     @field_serializer("work_hours")
-#     def serialize_work_hours(self, v):
-#         return round(v, 2) if v is not None else None
+    class Config:
+        from_attributes = True
 
-#     @computed_field
-#     @property
-#     def work_duration(self) -> str | None:
-#         if self.work_hours is None:
-#             return None
-#         hours = int(self.work_hours)
-#         minutes = int((self.work_hours * 60) % 60)
-#         return f"{hours}h {minutes}m"
-
-#     class Config:
-#         from_attributes = True
-
-# # Leave request schemas
-# class LeaveRequestCreate(BaseModel):
-#     employee_id: int
-#     start_date: datetime
-#     end_date: datetime
-#     leave_type: str
-#     reason: str = None
-
-# class LeaveRequestUpdate(BaseModel):
-#     start_date: datetime = None
-#     end_date: datetime = None
-#     leave_type: str = None
-#     status: str = None
-#     reason: str = None
-
-# class LeaveRequestOut(BaseModel):
-#     id: int
-#     employee_id: int
-#     start_date: datetime
-#     end_date: datetime
-#     leave_type: str
-#     status: str
-#     reason: Optional[str]
-
-#     @field_serializer("start_date")
-#     def serialize_start_date(self, value):
-#         return to_ist(value)
-
-#     @field_serializer("end_date")
-#     def serialize_end_date(self, value):
-#         return to_ist(value)
-
-#     class Config:
-#         from_attributes = True
-
-# # Leave Balance (additions)
-
-# class LeaveBalanceOut(BaseModel):
-#     available_coins: int          # min(rolling_available, 10)
-#     raw_available: int            # uncapped in rolling window
-#     expiring_soon: list[dict]     # [{ "expiry_date": datetime, "amount": int }]
-#     recent_txns: list[dict]       # last 10 txns: [{ "type": str, "amount": int, "occurred_at": datetime, "comment": Optional[str] }]
-
-#     @field_serializer("expiring_soon")
-#     def serialize_expiry(self, v):
-#         # convert datetimes to IST similar to others if desired
-#         from utils import to_ist
-#         out = []
-#         for item in v:
-#             out.append({
-#                 "expiry_date": to_ist(item["expiry_date"]),
-#                 "amount": item["amount"],
-#             })
-#         return out
-
-#     @field_serializer("recent_txns")
-#     def serialize_txns(self, v):
-#         from utils import to_ist
-#         out = []
-#         for t in v:
-#             out.append({
-#                 "type": t["type"],
-#                 "amount": t["amount"],
-#                 "occurred_at": to_ist(t["occurred_at"]),
-#                 "comment": t.get("comment"),
-#             })
-#         return out
-
-#     class Config:
-#         from_attributes = True
+# Notification schemas
+class UnreadCountOut(BaseModel):
+    unread_count: int
 
 
-# # break and clockout added        
-# class WorkSessionStateOut(BaseModel):
-#     session_id: int | None
-#     status: Literal["active", "break", "ended"] | None
-#     clock_in_time: datetime | None
-#     clock_out_time: datetime | None
-#     elapsed_work_seconds: int  # excludes breaks
-#     elapsed_break_seconds: int # current open break duration if on break, else 0
+# Employee Profile Update Schema
+class EmployeeProfileUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=2, max_length=100)
+    phone: Optional[str] = Field(None, min_length=10, max_length=15)
+    
+    class Config:
+        str_strip_whitespace = True
 
-#     class Config:
-#         from_attributes = True
-
-# class WorkSessionDayRow(BaseModel):
-#     date: datetime
-#     first_clock_in: datetime | None
-#     last_clock_out: datetime | None
-#     total_break_seconds: int
-#     total_work_seconds: int
-#     ot_sec: int = 0
-
-# class ClockActionResponse(BaseModel):
-#     session_id: int
-#     status: Literal["active", "break", "ended"]
-#     message: str
+    @validator('phone')
+    def validate_phone(cls, v):
+        if v is None:
+            return v
+        # Remove all non-digits
+        digits_only = re.sub(r'\D', '', v)
+        # Check if it's a valid Indian mobile number (10 digits starting with 6-9)
+        if not re.match(r'^[6-9]\d{9}$', digits_only):
+            raise ValueError('Phone must be a valid 10-digit mobile number')
+        return digits_only

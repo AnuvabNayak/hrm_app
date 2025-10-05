@@ -31,6 +31,23 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     user.role = role
     return user
 
+
+def get_current_employee(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get the current employee from the current user"""
+    from models import Employee  # Import here to avoid circular imports
+    
+    employee = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Employee profile not found"
+        )
+    return employee
+
+
 class RoleChecker:
     def __init__(self, allowed_roles):
         self.allowed_roles = set(allowed_roles)

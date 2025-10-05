@@ -1,18 +1,15 @@
 # router\attendance_rt.py
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from datetime import datetime, timezone, timedelta  # Add this line
+from datetime import datetime, timezone, timedelta
 from db import get_db
-from dependencies import get_current_user
-from models import Employee, User, WorkSession  # Add WorkSession to imports
+from dependencies import get_current_user, allow_admin
+from models import Employee, User, WorkSession
 from services.attendance_rt import *
 from services.timezone_utils import format_ist_time_12h
-# from services.attendance_rt import (
-#     require_employee_for_user, clock_in, start_break, stop_break, clock_out,
-#     session_state, sessions_last_days, get_today_completed_work, _sum_breaks, _utc_now # Add this
-# )
 from zoneinfo import ZoneInfo
 from schemas import WorkSessionStateOut, WorkSessionDayRow, ClockActionResponse
+
 router = APIRouter(prefix="/attendance-rt", tags=["Attendance RT"])
 
 @router.get("/active", response_model=WorkSessionStateOut)
@@ -59,7 +56,6 @@ def post_clock_out(
     try:
         emp = require_employee_for_user(db, current_user.id)
         ws = clock_out(db, emp.id)
-        # db.commit()  # Backup commit (if service doesn't commit)
         return ClockActionResponse(
             session_id=ws.id,
             status=ws.status,
@@ -143,3 +139,79 @@ def get_timesheet_history(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch timesheet data: {str(e)}")
+
+# Admin endpoints have been added below
+
+@router.get("/admin/all-employees-status", dependencies=[Depends(allow_admin)])
+def admin_all_employees_status(db: Session = Depends(get_db)):
+    """
+    Get current status of all employees, including username via an explicit join.
+    """
+    # Join Employee -> User on Employee.user_id == User.id
+    rows = (
+        db.query(
+            Employee.id.label("employee_id"),
+            Employee.name.label("employee_name"),
+            Employee.emp_code.label("emp_code"),
+            User.username.label("username")
+        )
+        .join(User, Employee.user_id == User.id)
+        .all()
+    )
+
+    result = []
+    for r in rows:
+        status_data = session_state(db, r.employee_id)  # existing helper
+        result.append({
+            "employee_id": r.employee_id,
+            "employee_name": r.employee_name,
+            "username": r.username,
+            "emp_code": r.emp_code,
+            "current_status": status_data["status"],
+            "clock_in_time": status_data["clock_in_time"],
+            "elapsed_work_seconds": status_data["elapsed_work_seconds"],
+            "elapsed_break_seconds": status_data["elapsed_break_seconds"],
+        })
+    return result
+
+@router.get("/admin/employee/{employee_id}/recent", dependencies=[Depends(allow_admin)])
+def admin_employee_attendance(
+    employee_id: int, 
+    days: int = Query(14, le=90), 
+    db: Session = Depends(get_db)
+):
+    """Get specific employee's attendance history"""
+    # Verify employee exists
+    employee = db.query(Employee).filter(Employee.id == employee_id).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    
+    return sessions_last_days(db, employee_id, days)
+
+@router.post("/admin/employee/{employee_id}/clock-in", dependencies=[Depends(allow_admin)])
+def admin_clock_in_employee(employee_id: int, db: Session = Depends(get_db)):
+    """Admin clock in an employee"""
+    employee = db.query(Employee).filter(Employee.id == employee_id).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    
+    try:
+        session = clock_in(db, employee_id)
+        db.commit()
+        return {"message": f"Clocked in {employee.name}", "session_id": session.id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/admin/employee/{employee_id}/clock-out", dependencies=[Depends(allow_admin)])
+def admin_clock_out_employee(employee_id: int, db: Session = Depends(get_db)):
+    """Admin clock out an employee"""
+    employee = db.query(Employee).filter(Employee.id == employee_id).first()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    
+    try:
+        session = clock_out(db, employee_id)
+        db.commit()
+        return {"message": f"Clocked out {employee.name}", "total_work_seconds": session.total_work_seconds}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
