@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from datetime import datetime
 from services.timezone_utils import format_ist_datetime
-
 from models import Post, PostReaction, PostView, User
 from schemas import PostOut, ReactionCreate, UnreadCountOut
 from db import get_db
@@ -13,13 +12,12 @@ router = APIRouter(prefix="/posts", tags=["Posts"])
 
 @router.get("/", response_model=List[PostOut])
 def get_posts(
-    skip: int = 0, 
-    limit: int = 20, 
+    skip: int = 0,
+    limit: int = 20,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Get all posts with reactions and view status"""
-    
     # Get posts with author info
     posts_query = db.query(Post).options(
         joinedload(Post.author),
@@ -29,7 +27,7 @@ def get_posts(
     
     # Order by pinned first, then by creation date desc
     posts = posts_query.order_by(
-        Post.is_pinned.desc(), 
+        Post.is_pinned.desc(),
         Post.id.desc()
     ).offset(skip).limit(limit).all()
     
@@ -40,23 +38,29 @@ def get_posts(
         user_reactions = []
         
         for reaction in post.reactions:
-            if reaction.emoji not in reaction_counts:
-                reaction_counts[reaction.emoji] = 0
-            reaction_counts[reaction.emoji] += 1
+            # ✅ ENSURE PROPER EMOJI HANDLING
+            emoji = reaction.emoji if reaction.emoji else "👍"  # Fallback
+            if emoji not in reaction_counts:
+                reaction_counts[emoji] = 0
+            reaction_counts[emoji] += 1
             
             if reaction.user_id == current_user.id:
-                user_reactions.append(reaction.emoji)
+                user_reactions.append(emoji)
         
         # Check if user has viewed this post
         is_viewed = any(view.user_id == current_user.id for view in post.views)
         
+        # ✅ ENSURE CONTENT IS PROPERLY ENCODED
+        post_content = post.content or ""
+        post_title = post.title or ""
+        
         post_data = PostOut(
             id=post.id,
-            title=post.title,
-            content=post.content,
+            title=post_title,
+            content=post_content,
             author_id=post.author_id,
             author_name=post.author.username if post.author else None,
-            created_at=format_ist_datetime(post.created_at),  # Convert to IST string
+            created_at=format_ist_datetime(post.created_at),
             updated_at=format_ist_datetime(post.updated_at),
             is_pinned=post.is_pinned,
             status=post.status,
@@ -64,6 +68,7 @@ def get_posts(
             user_reactions=user_reactions,
             is_viewed=is_viewed
         )
+        
         result.append(post_data)
     
     return result
@@ -80,11 +85,14 @@ def toggle_reaction(
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
     
+    # ✅ ENSURE EMOJI IS PROPERLY HANDLED
+    emoji = reaction.emoji.strip() if reaction.emoji else "👍"
+    
     # Check if reaction already exists
     existing_reaction = db.query(PostReaction).filter(
         PostReaction.post_id == post_id,
         PostReaction.user_id == current_user.id,
-        PostReaction.emoji == reaction.emoji
+        PostReaction.emoji == emoji
     ).first()
     
     if existing_reaction:
@@ -96,13 +104,13 @@ def toggle_reaction(
         new_reaction = PostReaction(
             post_id=post_id,
             user_id=current_user.id,
-            emoji=reaction.emoji
+            emoji=emoji
         )
         db.add(new_reaction)
         action = "added"
     
     db.commit()
-    return {"message": f"Reaction {action}", "emoji": reaction.emoji}
+    return {"message": f"Reaction {action}", "emoji": emoji}
 
 @router.post("/{post_id}/view")
 def mark_post_viewed(
@@ -131,7 +139,6 @@ def mark_post_viewed(
 @router.get("/unread/count", response_model=UnreadCountOut)
 def get_unread_count(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get count of unread posts"""
-    
     # Get all published posts
     all_posts = db.query(Post.id).filter(Post.status == "published").all()
     all_post_ids = [p.id for p in all_posts]

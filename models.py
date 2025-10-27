@@ -10,6 +10,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    Unicode,
     func,
     )
 from sqlalchemy.orm import relationship, DeclarativeBase
@@ -148,8 +149,8 @@ class Post(Base):
     __tablename__ = "posts"
     
     id = Column(Integer, primary_key=True, index=True)
-    title = Column(String(255), nullable=False)
-    content = Column(String, nullable=False)  # Using String instead of Text for MSSQL compatibility
+    title = Column(Unicode(255), nullable=False)
+    content = Column(Unicode, nullable=False)  # Using String instead of Text for MSSQL compatibility
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -167,7 +168,7 @@ class PostReaction(Base):
     id = Column(Integer, primary_key=True, index=True)
     post_id = Column(Integer, ForeignKey("posts.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    emoji = Column(String(10), nullable=False)
+    emoji = Column(Unicode(20), nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Relationships

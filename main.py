@@ -1,6 +1,28 @@
 from fastapi import APIRouter, FastAPI, Depends, HTTPException, Query
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
+
+import sys
+import os
+import locale
+
+# ✅ ENSURE UTF-8 ENCODING AT APPLICATION LEVEL
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
+# SET LOCALE FOR UTF-8 (OPTIONAL)
+try:
+    locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+except locale.Error:
+    try:
+        locale.setlocale(locale.LC_ALL, 'C.UTF-8')
+    except locale.Error:
+        pass  # Use system default
+
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -19,6 +41,7 @@ from router import posts, admin_posts
 from services.leave_coins import grant_coins, expire_coins
 from dependencies import router as dependencies_router
 from services.scheduler import quote_scheduler
+
 
 
 scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
@@ -89,28 +112,42 @@ async def lifespan(app: FastAPI):
         # shutdown
         scheduler.shutdown()
 
-app = FastAPI(title="Zytexa HRM API", version="1.0.0", lifespan=lifespan)
+# ✅ ENHANCED FASTAPI CONFIGURATION
+app = FastAPI(
+    title="Zytexa HRM API", 
+    version="1.0.0", 
+    lifespan=lifespan
+)
 
+# ✅ ENHANCED CORS WITH UTF-8 SUPPORT
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
-    allow_credentials=True,# Set to False unless you need credentialed cross-origin requests (cookies, HTTP auth)
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # ✅ ENSURE UTF-8 HEADERS ARE EXPOSED
+    expose_headers=["Content-Type", "Content-Encoding"],
 )
-# @app.on_event("startup")
-# async def startup_event():
-#     """Start background services"""
-#     print("Starting Zytexa HRM API...")
-#     quote_scheduler.start()
-#     print("All background services started")
 
-# @app.on_event("shutdown")
-# async def shutdown_event():
-#     """Stop background services"""
-#     print("Shutting down Zytexa HRM API...")
-#     quote_scheduler.stop()
-#     print("All background services stopped")
+# ✅ ADD UTF-8 RESPONSE MIDDLEWARE
+@app.middleware("http")
+async def add_utf8_header(request, call_next):
+    response = await call_next(request)
+    if response.headers.get("content-type", "").startswith("application/json"):
+        response.headers["content-type"] = "application/json; charset=utf-8"
+    return response
+
+
+# app = FastAPI(title="Zytexa HRM API", version="1.0.0", lifespan=lifespan)
+
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=["http://localhost:5173"],
+#     allow_credentials=True,# Set to False unless you need credentialed cross-origin requests (cookies, HTTP auth)
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
     
 router = APIRouter()
 

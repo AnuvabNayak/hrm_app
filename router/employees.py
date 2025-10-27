@@ -95,7 +95,28 @@ def create_employee(employee: EmployeeCreate, db: Session = Depends(get_db), cur
 
 @router.get("/", response_model=List[EmployeeOut], dependencies=[Depends(allow_admin)])
 def read_employees(skip: int = 0, limit: int = 10, db: Session = Depends(get_db)):
-    return db.query(Employee).order_by(Employee.id.desc()).offset(skip).limit(limit).all()
+    """Get all employees with user data (admin only)"""
+    employees = db.query(Employee).order_by(Employee.id.desc()).offset(skip).limit(limit).all()
+    
+    result = []
+    for emp in employees:
+        # ✅ FETCH USER DATA FOR EACH EMPLOYEE
+        user = db.query(User).filter(User.id == emp.user_id).first()
+        
+        # Create response manually to include username
+        emp_data = {
+            "id": emp.id,
+            "name": emp.name,
+            "user_id": emp.user_id,
+            "email": emp.email,
+            "phone": emp.phone,
+            "avatar_url": emp.avatar_url,
+            "emp_code": emp.emp_code,
+            "username": user.username if user else None  # ✅ ADD USERNAME
+        }
+        result.append(emp_data)
+    
+    return result
 
 
 @router.get("/{employee_id}", response_model=EmployeeOut)

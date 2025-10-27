@@ -240,6 +240,34 @@ class ReactionOut(BaseModel):
     class Config:
         from_attributes = True
 
+class ReactionDetail(BaseModel):
+    user_id: int
+    username: str
+    emoji: str
+    created_at: str
+    
+    class Config:
+        from_attributes = True
+
+
+class PostOutAdmin(BaseModel):
+    id: int
+    title: str
+    content: str
+    author_id: int
+    author_name: Optional[str] = None
+    created_at: str
+    updated_at: str
+    is_pinned: bool
+    status: str
+    reaction_counts: dict  # {"👍": 5, "❤️": 3}
+    reactions: list[ReactionDetail]  # ✅ NEW: List of detailed reactions
+    total_reactions: int
+    view_count: int
+    
+    class Config:
+        from_attributes = True
+
 # Notification schemas
 class UnreadCountOut(BaseModel):
     unread_count: int
