@@ -4,9 +4,10 @@ from typing import List, Optional
 from datetime import datetime
 from services.timezone_utils import format_ist_datetime
 from models import Post, PostReaction, PostView, User
-from schemas import PostOut, ReactionCreate, UnreadCountOut
+from schemas import PostOut, ReactionCreate, UnreadCountOut, PostCreate, PostUpdate
 from db import get_db
-from dependencies import get_current_user
+from dependencies import get_current_user, allow_admin
+from services.notification_service import notify_post_created_email
 
 router = APIRouter(prefix="/posts", tags=["Posts"])
 
@@ -153,3 +154,69 @@ def get_unread_count(db: Session = Depends(get_db), current_user: User = Depends
     unread_count = len([pid for pid in all_post_ids if pid not in viewed_post_ids])
     
     return UnreadCountOut(unread_count=unread_count)
+
+@router.post("/admin/posts", response_model=PostOut, dependencies=[Depends(allow_admin)], tags=["Admin - Posts"])
+def create_post(
+    post: PostCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Create a new post (Admin only).
+    
+    - **title**: Post title
+    - **content**: Post content (markdown supported)
+    - **is_pinned**: Whether post should be pinned (optional, default: false)
+    """
+    try:
+        # Create post in database
+        db_post = Post(
+            title=post.title,
+            content=post.content,
+            author_id=current_user.id,
+            status="published",
+            is_pinned=post.is_pinned if hasattr(post, 'is_pinned') else False
+        )
+        db.add(db_post)
+        db.commit()
+        db.refresh(db_post)
+        
+        # Send email notification to all employees
+        notify_post_created_email(db, db_post)
+        
+        return db_post
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create post: {str(e)}"
+        )
+
+@router.put("/admin/posts/{post_id}/pin", response_model=PostOut, dependencies=[Depends(allow_admin)])
+def pin_post(
+    post_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Pin or unpin a post (Admin only)."""
+    try:
+        post = db.query(Post).filter(Post.id == post_id).first()
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+        
+        # Toggle pin status
+        post.is_pinned = not post.is_pinned
+        db.commit()
+        db.refresh(post)
+        
+        # Optional: Send email notification if pinned
+        # if post.is_pinned:
+        #     notify_post_pinned_email(db, post)
+        
+        return post
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to pin post: {str(e)}"
+        )

@@ -8,4 +8,8 @@ python-decouple
 apscheduler
 requests
 pydantic
-EOF
+gunicorn
+psycopg2-binary
+python-dotenv
+bcrypt
+pytz
